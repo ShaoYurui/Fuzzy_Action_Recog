@@ -3,8 +3,9 @@ import numpy as np
 import skfuzzy as fuzz
 from skfuzzy import control as ctrl
 import glob
+import random
 import time
-
+import matplotlib.pyplot as plt
 correct = 0
 
 
@@ -15,46 +16,51 @@ def read_csv_file(file_path, nrows):
     return df
 
 
-def calculate_average_difference(df1, df2, column):
-    return int(abs(df1[column] - df2[column]).mean())
-
-
 def create_fuzzy_system():
     max_range = 32767
-    acc_x_diff = ctrl.Antecedent(np.arange(0, max_range + 1, 1), 'acc_x')
-    acc_y_diff = ctrl.Antecedent(np.arange(0, max_range + 1, 1), 'acc_y')
-    acc_z_diff = ctrl.Antecedent(np.arange(0, max_range + 1, 1), 'acc_z')
-    gyro_x_diff = ctrl.Antecedent(np.arange(0, max_range + 1, 1), 'gyro_x')
-    gyro_y_diff = ctrl.Antecedent(np.arange(0, max_range + 1, 1), 'gyro_y')
-    gyro_z_diff = ctrl.Antecedent(np.arange(0, max_range + 1, 1), 'gyro_z')
+    max_similarity = 100
 
-    similarity = ctrl.Consequent(np.arange(0, 101, 1), 'similarity')
+    acc_x_diff = ctrl.Antecedent(np.arange(-max_range, max_range + 1, 1), 'acc_x_diff')
+    acc_y_diff = ctrl.Antecedent(np.arange(-max_range, max_range + 1, 1), 'acc_y_diff')
+    acc_z_diff = ctrl.Antecedent(np.arange(-max_range, max_range + 1, 1), 'acc_z_diff')
+    gyro_x_diff = ctrl.Antecedent(np.arange(-max_range, max_range + 1, 1), 'gyro_x_diff')
+    gyro_y_diff = ctrl.Antecedent(np.arange(-max_range, max_range + 1, 1), 'gyro_y_diff')
+    gyro_z_diff = ctrl.Antecedent(np.arange(-max_range, max_range + 1, 1), 'gyro_z_diff')
 
+    similarity = ctrl.Consequent(np.arange(0, max_similarity + 1, 1), 'similarity')
+
+    # define fuzzy set
     for antecedent in [acc_x_diff, acc_y_diff, acc_z_diff, gyro_x_diff, gyro_y_diff, gyro_z_diff]:
-        antecedent['low'] = fuzz.trimf(antecedent.universe, [0, 0, max_range / 2])
-        antecedent['high'] = fuzz.trimf(antecedent.universe, [max_range / 2, max_range, max_range])
+        antecedent['NL'] = fuzz.trimf(antecedent.universe, [-max_range, -max_range, -max_range * 2 / 3])
+        antecedent['NM'] = fuzz.trimf(antecedent.universe, [-max_range, -max_range * 2 / 3, -max_range / 3])
+        antecedent['NS'] = fuzz.trimf(antecedent.universe, [-max_range * 2 / 3, -max_range / 3, 0])
+        antecedent['AZ'] = fuzz.trimf(antecedent.universe, [-max_range / 3, 0, max_range / 3])
+        antecedent['PS'] = fuzz.trimf(antecedent.universe, [0, max_range / 3, max_range * 2 / 3])
+        antecedent['PM'] = fuzz.trimf(antecedent.universe, [max_range / 3, max_range * 2 / 3, max_range])
+        antecedent['PL'] = fuzz.trimf(antecedent.universe, [max_range * 2 / 3, max_range, max_range])
 
-    similarity['low'] = fuzz.trimf(similarity.universe, [0, 0, 50])
-    similarity['high'] = fuzz.trimf(similarity.universe, [50, 100, 100])
+    similarity['AZ'] = fuzz.trimf(similarity.universe, [0, 0, max_similarity / 3])
+    similarity['PS'] = fuzz.trimf(similarity.universe, [0, max_similarity / 3, max_similarity * 2 / 3])
+    similarity['PM'] = fuzz.trimf(similarity.universe, [max_similarity / 3, max_similarity * 2 / 3, max_similarity])
+    similarity['PL'] = fuzz.trimf(similarity.universe, [max_similarity * 2 / 3, max_similarity, max_similarity])
 
     rules = []
-
     for antecedent in [acc_x_diff, acc_y_diff, acc_z_diff, gyro_x_diff, gyro_y_diff, gyro_z_diff]:
-        rules.append(ctrl.Rule(antecedent['low'], similarity['high']))
-        rules.append(ctrl.Rule(antecedent['high'], similarity['low']))
-
-    rules.append(ctrl.Rule(
-        acc_x_diff['low'] & acc_y_diff['low'] & acc_z_diff['low'] & gyro_x_diff['low'] & gyro_y_diff['low'] &
-        gyro_z_diff['low'], similarity['high']))
-
+        rules.append(ctrl.Rule(antecedent['NL'], similarity['AZ']))
+        rules.append(ctrl.Rule(antecedent['NM'], similarity['PS']))
+        rules.append(ctrl.Rule(antecedent['NS'], similarity['PM']))
+        rules.append(ctrl.Rule(antecedent['AZ'], similarity['PL']))
+        rules.append(ctrl.Rule(antecedent['PS'], similarity['PM']))
+        rules.append(ctrl.Rule(antecedent['PM'], similarity['PS']))
+        rules.append(ctrl.Rule(antecedent['PL'], similarity['AZ']))
     similarity_ctrl = ctrl.ControlSystem(rules)
-    similarity_sim = ctrl.ControlSystemSimulation(similarity_ctrl)
 
+    similarity_sim = ctrl.ControlSystemSimulation(similarity_ctrl)
     return similarity_sim
 
 
-def check_similarity(fuzzy_system, avg_diffs):
-    for key, value in avg_diffs.items():
+def check_similarity(fuzzy_system, col_diffs):
+    for key, value in col_diffs.items():
         fuzzy_system.input[key] = value
 
     fuzzy_system.compute()
@@ -85,30 +91,48 @@ def check_csv_similarity_with_base(file_path):
     for base in base_files:
         file1 = base
         df1 = read_csv_file(file1, nrows)
-
-        columns = ['acc_x', 'acc_y', 'acc_z', 'gyro_x', 'gyro_y', 'gyro_z']
-        avg_diffs = {col: calculate_average_difference(df1, df2, col) for col in columns}
-        # print(avg_diffs)
-        similarity_score = check_similarity(fuzzy_system, avg_diffs)
-
-        #print(f"Similarity score for {df1['action_index'][0]}: {similarity_score}")
+        similarity_score = 0
+        for i in range(nrows):
+            columns = ['acc_x', 'acc_y', 'acc_z', 'gyro_x', 'gyro_y', 'gyro_z']
+            col_diffs = {col + '_diff': df1[col][i] - df2[col][i] for col in columns}
+            similarity_score = similarity_score + check_similarity(fuzzy_system, col_diffs)
+            # print(col_diffs)
+            # # print(f"Similarity score for {df1['action_index'][0]}: {similarity_score}")
+        similarity_score = similarity_score / nrows
         if similarity_score > result[df1['action_index'][0]]:
             result[df1['action_index'][0]] = similarity_score
 
     verify_result(df2, result)
-    # print(verify_result(df2, result))
+    print(result)
 
 
 def main():
     # List all files with a '.csv' extension in the folder
     csv_files = glob.glob('data_2023-04-08/*.csv')
-    #csv_files = glob.glob('*.csv')
-    for csv_file in csv_files:
+    # csv_files = glob.glob('*.csv')
+    random.shuffle(csv_files)
+    acc = 0
+    acc_values = []
+
+    plt.ion()  # Turn on interactive mode
+    fig, ax = plt.subplots()
+    for n, csv_file in enumerate(csv_files):
         start_time = time.time()
         check_csv_similarity_with_base(csv_file)
         elapsed_time = time.time() - start_time
-        # print(elapsed_time,csv_file, correct)
-    print("accuray:", correct * 100 / len(csv_files))
+        acc = correct * 100 / (n+1)
+        acc_values.append(acc)
+        print(elapsed_time, csv_file,acc)
+        ax.clear()
+        ax.set_ylim(0, 120)
+        ax.plot(acc_values, label="Accuracy")
+        ax.legend(loc='upper right')
+
+        plt.draw()
+        plt.pause(0.1)  # Adjust the time interval between updates
+
+    plt.ioff()  # Turn off interactive mode
+    plt.show()
 
 
 if __name__ == "__main__":
